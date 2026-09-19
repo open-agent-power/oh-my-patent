@@ -1,0 +1,7 @@
+# oh-my-patent 运行依赖
+#
+# 只依赖两个包，且都是纯 Python / 预编译轮子，不需要编译器：
+#   python-docx —— 读写 OOXML (.docx)，WPS 与 MS Office 均原生支持
+#   PyYAML      —— 解析稿件头部的 YAML frontmatter
+python-docx>=1.1.0
+PyYAML>=6.0

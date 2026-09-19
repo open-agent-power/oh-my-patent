@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oh-my-patent"
+version = "0.1.0"
+description = "自动化专利 SKILL，同时适配 WPS、Office。"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "open-agent-power" }]
+keywords = ["patent", "docx", "wps", "office", "agent-skill", "专利"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: Chinese (Simplified)",
+    "Topic :: Office/Business :: Office Suites",
+]
+dependencies = [
+    "python-docx>=1.1.0",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+oh-my-patent = "oh_my_patent.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/open-agent-power/oh-my-patent"
+
+[tool.setuptools]
+packages = ["oh_my_patent", "oh_my_patent.render"]

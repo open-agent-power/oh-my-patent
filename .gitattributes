@@ -1,0 +1,23 @@
+# 统一行尾为 LF。
+# Windows 上 git 默认 core.autocrlf=true，检出时会转成 CRLF，
+# 导致「只改了一行却整文件 diff」。显式声明后仓库内的行尾是确定的。
+* text=auto eol=lf
+
+# 二进制文件不参与行尾转换，否则会损坏内容。
+*.docx binary
+*.doc   binary
+*.xlsx  binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.pdf   binary
+*.zip   binary
+
+# 生成的文本文件用 LF 即可，与源码一致。
+*.py   text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
