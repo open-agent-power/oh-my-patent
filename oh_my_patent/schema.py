@@ -368,36 +368,6 @@ class PatentDraft:
         return [c for c in self.claims if not c.independent]
 
     @property
-    def summary_parts(self) -> list[tuple[str, str]]:
-        """「发明内容」下的三段式内容，按法定顺序返回。
-
-        这是审查指南对发明内容的要求：应当写明要解决的技术问题、
-        技术方案以及相对于现有技术的有益效果。返回 ``(小标题, 正文)``，
-        只包含非空项。
-        """
-        labels = (
-            ("要解决的技术问题", self.problems),
-            ("技术方案", self.solution),
-            ("有益效果", self.effects),
-        )
-        return [(label, text.strip()) for label, text in labels if text.strip()]
-
-    @property
-    def summary_is_structured(self) -> bool:
-        """「发明内容」是否写成了分小标题的三段式。
-
-        稿件有两种常见写法：
-
-        - **连写式**：只在 ``## 发明内容`` 下写完整段落，不分子标题。
-        - **三段式**：用 ``### 要解决的技术问题`` / ``### 技术方案`` /
-          ``### 有益效果`` 分开写。
-
-        只有后一种才需要处理小标题（并入段落做引导词、保留或丢弃），
-        前一种直接整段输出即可。
-        """
-        return bool(self.problems.strip() or self.effects.strip())
-
-    @property
     def abstract_figure(self) -> Drawing | None:
         """摘要附图。
 

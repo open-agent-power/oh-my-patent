@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import re
 
-from .report import Issue, Severity, snippet
+from .report import Issue, Severity
 from .schema import PatentDraft
 from .spec import (
     AI_BLACKBOX_PHRASES,
