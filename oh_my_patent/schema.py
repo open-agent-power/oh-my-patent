@@ -477,3 +477,71 @@ class PatentDraft:
             or self.sections()
             or not self.design_brief.is_empty()
         )
+
+    # ----------------------------------------------------------------
+    # 遍历
+    # ----------------------------------------------------------------
+
+    def iter_text(self) -> list[tuple[str, str]]:
+        """返回稿件中所有 ``(位置, 文本)`` 对。
+
+        检查层需要"通读全稿找某个东西"，与其在每个检查函数里各写一遍
+        遍历逻辑，不如把它放在模型上——位置标签也就只有这一处需要维护。
+        """
+        items: list[tuple[str, str]] = [("名称", self.title)]
+
+        if self.abstract:
+            items.append(("摘要", self.abstract))
+
+        for claim in self.claims:
+            items.append((f"权利要求{claim.number}", claim.text))
+
+        for field_name, label in (
+            ("technical_field", "技术领域"),
+            ("background", "背景技术"),
+            ("problems", "发明内容·技术问题"),
+            ("solution", "发明内容·技术方案"),
+            ("effects", "发明内容·有益效果"),
+            ("embodiments", "具体实施方式"),
+        ):
+            value = getattr(self, field_name, "")
+            if value:
+                items.append((label, value))
+
+        for index, subsection in enumerate(self.extra_sections, start=1):
+            if subsection.body:
+                items.append((subsection.heading or f"补充章节{index}", subsection.body))
+
+        brief = self.design_brief
+        for value, label in (
+            (brief.usage, "简要说明·用途"),
+            (brief.points, "简要说明·设计要点"),
+            (brief.best_view, "简要说明·代表图"),
+            (brief.omitted_views, "简要说明·省略视图"),
+        ):
+            if value:
+                items.append((label, value))
+
+        return items
+
+    def claims_text(self) -> str:
+        """全部权利要求的文本，用于「权利要求里有没有提到某件事」这类判断。"""
+        return "\n".join(claim.text for claim in self.claims)
+
+    def description_text(self) -> str:
+        """说明书正文（技术领域 → 具体实施方式），**不含权利要求与摘要**。
+
+        这个区分很关键：指南要求"说明书应当记载……"，判断依据只能是说明书
+        本身。若把权利要求也算进去，会出现"权利要求写了但说明书没写"
+        却被判为合规的情况——而这恰恰是「得不到说明书支持」的典型缺陷。
+        """
+        parts = [
+            self.technical_field,
+            self.background,
+            self.problems,
+            self.solution,
+            self.effects,
+            self.embodiments,
+        ]
+        parts.extend(s.body for s in self.extra_sections if s.body)
+        return "\n".join(part for part in parts if part)

@@ -11,10 +11,7 @@
 
 from __future__ import annotations
 
-import json
 import re
-from dataclasses import dataclass, field
-from enum import Enum
 
 from .schema import PatentDraft, PatentType
 from .spec import (
@@ -33,143 +30,10 @@ from .spec import (
 )
 
 
-class Severity(str, Enum):
-    """问题严重程度。
+# 结果类型与共享工具集中在 report 模块，各组检查共用同一套结构。
+from .lint_ai import AI_CHECKS
+from .report import Issue, LintReport, Severity, count_chars  # noqa: F401
 
-    ``ERROR``   几乎必然导致补正或不予受理，必须改。
-    ``WARNING`` 形式上可被接受，但实务中会被审查员指出，建议改。
-    ``INFO``    提示性信息，供人工复核。
-    """
-
-    ERROR = "error"
-    WARNING = "warning"
-    INFO = "info"
-
-    @property
-    def rank(self) -> int:
-        return {"error": 0, "warning": 1, "info": 2}[self.value]
-
-    @property
-    def label(self) -> str:
-        return {"error": "错误", "warning": "警告", "info": "提示"}[self.value]
-
-
-@dataclass
-class Issue:
-    """一条检查结果。"""
-
-    severity: Severity
-    code: str
-    message: str
-    location: str = ""
-    hint: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "severity": self.severity.value,
-            "code": self.code,
-            "message": self.message,
-            "location": self.location,
-            "hint": self.hint,
-        }
-
-    def render(self) -> str:
-        icon = {"error": "✗", "warning": "!", "info": "·"}[self.severity.value]
-        where = f" [{self.location}]" if self.location else ""
-        line = f"  {icon} {self.severity.label} · {self.code}{where}\n      {self.message}"
-        if self.hint:
-            line += f"\n      → {self.hint}"
-        return line
-
-
-@dataclass
-class LintReport:
-    """一次自检的完整结果。"""
-
-    issues: list[Issue] = field(default_factory=list)
-
-    @property
-    def errors(self) -> list[Issue]:
-        return [i for i in self.issues if i.severity is Severity.ERROR]
-
-    @property
-    def warnings(self) -> list[Issue]:
-        return [i for i in self.issues if i.severity is Severity.WARNING]
-
-    @property
-    def ok(self) -> bool:
-        """没有 ``ERROR`` 级别的硬伤即视为通过。"""
-        return not self.errors
-
-    def sorted_issues(self) -> list[Issue]:
-        return sorted(self.issues, key=lambda i: i.severity.rank)
-
-    def to_dict(self) -> dict:
-        return {
-            "ok": self.ok,
-            "error_count": len(self.errors),
-            "warning_count": len(self.warnings),
-            "info_count": len(self.issues) - len(self.errors) - len(self.warnings),
-            "issues": [i.to_dict() for i in self.sorted_issues()],
-        }
-
-    def to_json(self, indent: int = 2) -> str:
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
-
-    def render(self) -> str:
-        if not self.issues:
-            return "✓ 自检通过：未发现格式或形式上的问题。"
-
-        lines = [
-            f"自检结果：{len(self.errors)} 个错误 / "
-            f"{len(self.warnings)} 个警告 / "
-            f"{len(self.issues) - len(self.errors) - len(self.warnings)} 条提示",
-            "",
-        ]
-        lines.extend(issue.render() for issue in self.sorted_issues())
-        return "\n".join(lines)
-
-
-# --------------------------------------------------------------------------
-# 工具
-# --------------------------------------------------------------------------
-
-def count_chars(text: str) -> int:
-    """统计摘要字数：忽略空白，汉字与标点各计一字。"""
-    return len(re.sub(r"\s", "", text))
-
-
-def _collect_text(draft: PatentDraft) -> list[tuple[str, str]]:
-    """返回稿件中所有 ``(位置, 文本)``，用于全稿扫描。"""
-    items: list[tuple[str, str]] = [("名称", draft.title)]
-    if draft.abstract:
-        items.append(("摘要", draft.abstract))
-    for claim in draft.claims:
-        items.append((f"权利要求{claim.number}", claim.text))
-    for field_name, label in (
-        ("technical_field", "技术领域"),
-        ("background", "背景技术"),
-        ("problems", "发明内容·技术问题"),
-        ("solution", "发明内容·技术方案"),
-        ("effects", "发明内容·有益效果"),
-        ("embodiments", "具体实施方式"),
-    ):
-        value = getattr(draft, field_name, "")
-        if value:
-            items.append((label, value))
-    brief = draft.design_brief
-    for value, label in (
-        (brief.usage, "简要说明·用途"),
-        (brief.points, "简要说明·设计要点"),
-        (brief.best_view, "简要说明·代表图"),
-        (brief.omitted_views, "简要说明·省略视图"),
-    ):
-        if value:
-            items.append((label, value))
-    return items
-
-
-# --------------------------------------------------------------------------
 # 各项检查
 # --------------------------------------------------------------------------
 
@@ -564,7 +428,7 @@ def check_description(draft: PatentDraft) -> list[Issue]:
     # 正文引用的图号必须真实存在
     known = {drawing.number for drawing in draft.drawings}
     referenced: set[int] = set()
-    for _, text in _collect_text(draft):
+    for _, text in draft.iter_text():
         for match in re.finditer(r"图\s*(\d+)", text):
             referenced.add(int(match.group(1)))
     unknown = sorted(referenced - known)
@@ -710,7 +574,7 @@ def check_placeholders(draft: PatentDraft) -> list[Issue]:
     或「待补充」，一旦进了正式申请文件就是硬伤。
     """
     issues: list[Issue] = []
-    for location, text in _collect_text(draft):
+    for location, text in draft.iter_text():
         for pattern in PLACEHOLDER_PATTERNS:
             if pattern in text:
                 index = text.find(pattern)
@@ -748,8 +612,164 @@ def check_metadata(draft: PatentDraft) -> list[Issue]:
                 "META-002",
                 "未填写发明人 / 设计人。",
                 "著录项目",
+                "在稿件 frontmatter 写 `inventors: [姓名]`。"
+                "注意《专利审查指南》（2026-01-01 施行）要求发明人应当是自然人，"
+                "并填写全部发明人的真实身份信息；不得填写单位、集体或者人工智能名称。",
             )
         )
+    return issues
+
+
+# --------------------------------------------------------------------------
+# 附图标记一致性
+# --------------------------------------------------------------------------
+
+#: 附图标记的识别式：**完整的汉字串**后紧跟 1~3 位数字。
+#:
+#: 用贪婪的 ``+`` 而不是 :{1,8}?`` 是有原因的：非贪婪模式会从词中间起匹配，
+#: 「权利要求1至5」会被切出「至」+「5」这种假标记，进而误报。
+#: 取完整汉字串后再看它的结尾，才能正确判断这是不是部件名称。
+_NUMERAL_RUN_RE = re.compile(r"([\u4e00-\u9fa5]+)(\d{1,3})(?![0-9])")
+
+#: 数字后面紧跟这些字，说明它是量值而不是附图标记（「3 个」「2 毫米」）。
+_MEASURE_UNITS: tuple[str, ...] = (
+    "毫米", "厘米", "分米", "千米", "公里", "米", "μm", "um", "nm",
+    "千克", "公斤", "克", "毫克", "吨",
+    "毫秒", "微秒", "纳秒", "秒", "分钟", "小时", "天", "年", "月", "日",
+    "个", "条", "层", "块", "片", "根", "段", "倍", "次", "步", "种",
+    "位", "台", "套", "组", "项", "款", "页", "行", "列", "字", "人",
+    "%", "％", "℃", "度", "分", "时",
+    "伏", "安", "瓦", "赫兹", "欧", "字节", "比特", "像素",
+)
+
+#: 汉字串以这些词结尾时，后面跟的数字是条目编号而不是附图标记。
+#:
+#: 这张表要够全：只要漏一个，「实施例2」这类写法就会让检查误报。
+#: 收词原则是「宁可多排除」——漏掉一个真标记只是少一条提醒，
+#: 误报一次却会让使用者不再信任整条检查。
+_NUMERAL_NOUN_SUFFIXES: tuple[str, ...] = (
+    "权利要求", "实施例", "实施方式", "对比例", "比较例", "例",
+    "步骤", "图", "方面", "方案", "方式", "情况", "问题", "效果",
+    "特征", "文献", "对比", "段落", "序号", "编号", "号码",
+    "试样", "样品", "样本", "参数", "指标", "条件",
+    "第", "式", "表", "类", "级", "阶段", "周期", "时刻", "种", "条", "项",
+)
+
+#: 以这些字结尾的汉字串也不构成部件名称——它们多是把两个编号连起来的
+#: 连接词，例如「权利要求1至5」中的「至」。
+_NUMERAL_CONNECTORS: tuple[str, ...] = (
+    "至", "和", "或", "及", "与", "以及", "或者", "及其",
+)
+
+
+def _looks_like_reference_numeral(run: str, tail: str) -> bool:
+    """判断「汉字串 + 数字」是不是一个附图标记。
+
+    只看数字两侧的局部特征，**不去猜那个部件叫什么**。原因是中文没有
+    词边界，脚本无法可靠切出「壳体」「杯盖」这样的名词——但判断
+    「这个数字是不是附图标记」并不需要知道名词，只需要排除掉
+    条目编号与量值两类干扰。
+    """
+    if run.endswith(_NUMERAL_CONNECTORS):
+        return False
+    if run.endswith(_NUMERAL_NOUN_SUFFIXES):
+        return False
+    if any(tail.lstrip().startswith(unit) for unit in _MEASURE_UNITS):
+        return False
+    return True
+
+
+def _extract_reference_numerals(text: str) -> set[int]:
+    """抽出文本中用到的附图标记编号。
+
+    刻意**只返回编号集合**，不试图建立「编号 → 部件名称」的对应关系。
+    那个映射需要中文分词，脚本做不可靠；而一条经常出错的检查，
+    比没有检查更糟——使用者会连正确的提醒一起不信任。
+
+    识别规则偏保守：宁可漏掉一些标记，也不要把「3 个」「2 毫米」
+    这类量值误判进来。
+    """
+    numbers: set[int] = set()
+    for match in _NUMERAL_RUN_RE.finditer(text):
+        run = match.group(1)
+        number = int(match.group(2))
+        tail = text[match.end(): match.end() + 3]
+        if _looks_like_reference_numeral(run, tail):
+            numbers.add(number)
+    return numbers
+
+
+def check_reference_numerals(draft: PatentDraft) -> list[Issue]:
+    """附图标记的一致性检查。
+
+    依据《专利法实施细则》第 21 条：几幅附图应当按照「图1，图2，……」
+    顺序编号排列；**说明书文字部分中未提及的附图标记不得在附图中出现，
+    附图中未出现的附图标记不得在说明书文字部分中提及**；表示同一组成部分
+    的附图标记应当一致。
+
+    本工具读不了图片内容，所以"附图中出现了什么标记"无从得知，
+    只能检查文字侧的一致性——而这一侧恰恰是最容易漏的：
+    说明书满篇「壳体1」「杯盖2」，却一张图都没登记。
+    """
+    issues: list[Issue] = []
+    if draft.patent_type is PatentType.DESIGN:
+        # 外观设计的图没有附图标记，检查不适用
+        return issues
+
+    claim_numerals = _extract_reference_numerals(draft.claims_text())
+    description_numerals = _extract_reference_numerals(draft.description_text())
+
+    if not claim_numerals and not description_numerals:
+        return issues
+
+    # ---- REF-001：说明书用了附图标记，但稿件没有附图 ----
+    #
+    # 这是最容易踩的硬伤。细则第 21 条明确：附图中未出现的附图标记
+    # 不得在说明书文字部分中提及。
+    if description_numerals and not draft.drawings:
+        sample = "、".join(str(n) for n in sorted(description_numerals)[:5])
+        issues.append(
+            Issue(
+                Severity.ERROR,
+                "REF-001",
+                f"说明书使用了附图标记（{sample}），但稿件中没有任何附图。",
+                "说明书",
+                "《专利法实施细则》第 21 条：附图中未出现的附图标记不得在"
+                "说明书文字部分中提及。请补交附图，或删除说明书中的附图标记。",
+            )
+        )
+
+    # ---- REF-002 / REF-003：权利要求引用了说明书里没有的标记 ----
+    if claim_numerals:
+        if not description_numerals:
+            sample = "、".join(str(n) for n in sorted(claim_numerals)[:5])
+            issues.append(
+                Issue(
+                    Severity.ERROR,
+                    "REF-002",
+                    f"权利要求中引用了附图标记（{sample}），"
+                    f"但说明书正文中找不到任何附图标记。",
+                    "权利要求书",
+                    "权利要求中的附图标记必须与说明书、附图保持一致。"
+                    "请先在说明书对应部件名称后加上相同的标记。",
+                )
+            )
+        else:
+            missing = sorted(claim_numerals - description_numerals)
+            if missing:
+                sample = "、".join(str(n) for n in missing[:5])
+                issues.append(
+                    Issue(
+                        Severity.ERROR,
+                        "REF-003",
+                        f"权利要求引用了说明书未出现的附图标记：{sample}。",
+                        "权利要求书",
+                        "《专利法实施细则》第 21 条：表示同一组成部分的附图标记"
+                        "应当一致，且附图中未出现的标记不得在文字部分中提及。"
+                        "请核对权利要求与说明书的标记编号是否对齐。",
+                    )
+                )
+
     return issues
 
 
@@ -760,9 +780,10 @@ ALL_CHECKS = (
     check_description,
     check_abstract,
     check_design,
+    check_reference_numerals,
     check_placeholders,
     check_metadata,
-)
+) + AI_CHECKS
 
 
 def lint(draft: PatentDraft) -> LintReport:
