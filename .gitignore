@@ -42,3 +42,8 @@ output/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---- AI 协作工作区 ----
+# 这里放的是本机的工作日志与协作约定，含本地绝对路径等信息。
+# 对使用本仓库的其他人没有价值，不入库。
+.workbuddy/
