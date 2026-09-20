@@ -1,15 +1,20 @@
 """命令行入口。
 
-三个子命令对应流水线上的三个动作：
+子命令对应流水线上的几个动作：
 
   ``build``     稿件 → 申请文件 .docx
   ``lint``      只做自检，不生成文件
   ``info``      打印解析结果摘要，用于确认稿件被正确理解
   ``template``  生成稿件骨架，降低从零起草的门槛
+  ``ingest``    项目材料（Word / PowerPoint）→ Markdown，供 Agent 阅读
 
 设计上刻意让 ``build`` 与 ``lint`` 分离：先生成再自己检查，
 不如先检查再生成。``build --strict`` 把两者串起来，
 自检不过就拒绝出文件，避免不合格的稿子流到交付环节。
+
+``ingest`` 是流水线的**最上游**：用户手里的立项报告、评审 PPT 大多是
+Office 文件，Agent 读不了，得先转成文本。它和 ``build`` 方向相反，
+所以依赖也是分开的——不读 Office 材料就永远用不到那几个库。
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, parser as draft_parser
+from . import ingest as ingest_mod
 from .lint import lint
 from .render import render_docx
 from .schema import PatentDraft, PatentType
@@ -166,6 +172,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_tpl.add_argument("--docx", action="store_true", help="改生成 .docx 空白模板而不是 Markdown 骨架")
     p_tpl.add_argument("--style", help=".docx 模板中的字体（仅 --docx 时有效）", default="宋体")
     p_tpl.add_argument("--font-size", type=float, default=BODY_FONT_SIZE_PT, help="正文字号（仅 --docx 时有效）")
+
+    # ---- ingest ----
+    p_ing = sub.add_parser(
+        "ingest",
+        help="把 Word / PowerPoint 材料转成 Markdown",
+        description=(
+            "读取项目里的 .docx / .pptx，转成 Agent 可读的 Markdown。"
+            "内嵌公式会就地转成占位文本并**显式告警**（分式与上下标会退化），"
+            "不会像朴素转换那样静默丢掉。"
+        ),
+    )
+    p_ing.add_argument(
+        "sources",
+        nargs="+",
+        help="源文件或目录。给目录时会递归找出其中全部 .docx / .pptx",
+    )
+    p_ing.add_argument(
+        "-o",
+        "--output",
+        help="输出目录（每个源文件生成一个同名 .md）。省略时打到标准输出",
+    )
+    p_ing.add_argument(
+        "--media-dir",
+        help="图片输出目录。省略时为「与 .md 同级的 {名字}_media」",
+    )
+    p_ing.add_argument(
+        "--no-images",
+        action="store_true",
+        help="不导出图片，只在正文留下位置提示",
+    )
+    p_ing.add_argument(
+        "--no-header",
+        action="store_true",
+        help="不在 .md 顶部写入转换元信息与告警注记",
+    )
+    p_ing.add_argument("--json", action="store_true", help="以 JSON 输出汇总")
 
     return ap
 
@@ -442,6 +484,233 @@ def _write_docx_template(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# ingest：把散落的项目材料读成文本
+# --------------------------------------------------------------------------
+
+_NOISE_DIRS = {"__pycache__", "node_modules"}
+
+#: 用户会往项目目录里放、但本工具读不了的 Office 材料。
+#: 目录扫描遇到它们**必须点名报告**——静默跳过等于悄悄丢掉用户材料：
+#: 用户以为全部处理完了，实际有半数的技术文档 Agent 根本没看到。
+_UNSUPPORTED_OFFICE = {
+    ".doc": "旧版 Word，请另存为 .docx",
+    ".ppt": "旧版 PowerPoint，请另存为 .pptx",
+    ".wps": "WPS 文字，请另存为 .docx",
+    ".dps": "WPS 演示，请另存为 .pptx",
+    ".xls": "Excel 工作簿，本工具不处理表格",
+    ".xlsx": "Excel 工作簿，本工具不处理表格",
+    ".xlsm": "Excel 工作簿，本工具不处理表格",
+    ".et": "WPS 表格，本工具不处理表格",
+    ".pdf": "PDF，请先转成 .docx 或文本",
+    ".rtf": "RTF，请另存为 .docx",
+    ".odt": "ODT，请另存为 .docx",
+}
+
+
+def _iter_ingest_sources(
+    raw_paths: list[str],
+) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """把「文件或目录」的参数展平成待处理清单。
+
+    :return: ``(可转换的文件, 发现但读不了的文件及原因)``。第二个返回值不是
+        可有可无的装饰——把它丢掉，就变成了静默漏材料。
+
+    给目录时会递归查找，但**跳过隐藏目录与依赖目录**——用户的工程目录里
+    躺着 ``.git``、``node_modules``、``__pycache__`` 是完全正常的事，
+    进去翻找既慢又没意义。
+    """
+    found: list[Path] = []
+    unsupported: list[tuple[Path, str]] = []
+
+    for raw in raw_paths:
+        path = Path(raw).expanduser()
+        if not path.is_dir():
+            # 不在这里判断存在性：交给 convert 报错，消息里会带上完整路径。
+            found.append(path)
+            continue
+
+        for child in sorted(path.rglob("*")):
+            if not child.is_file():
+                continue
+            # Office 打开文档时会生成 ~$ 开头的锁文件，不是真内容。
+            if child.name.startswith("~$"):
+                continue
+            relative = child.relative_to(path)
+            if any(
+                part.startswith(".") or part in _NOISE_DIRS for part in relative.parts
+            ):
+                continue
+
+            suffix = child.suffix.lower()
+            if suffix in ingest_mod.SUPPORTED_SUFFIXES:
+                found.append(child)
+            elif suffix in _UNSUPPORTED_OFFICE:
+                unsupported.append((child, _UNSUPPORTED_OFFICE[suffix]))
+
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in found:
+        key = str(path.resolve()).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique, unsupported
+
+
+def _report_unsupported(
+    unsupported: list[tuple[Path, str]], *, stream, limit: int = 12
+) -> None:
+    """把「发现了但读不了」的材料点名列出。
+
+    这是刻意的啰嗦：用户丢来一个项目目录，如果里面躺着 .doc 或 .pdf，
+    我们只字不提就等于替用户决定了「这些不重要」——而它们可能恰好
+    是核心的技术方案文档。
+    """
+    if not unsupported:
+        return
+    print(file=stream)
+    print(f"另有 {len(unsupported)} 个文件没有处理（本工具读不了）：", file=stream)
+    for path, reason in unsupported[:limit]:
+        print(f"  · {path.name}  —— {reason}", file=stream)
+    if len(unsupported) > limit:
+        print(f"  · … 还有 {len(unsupported) - limit} 个", file=stream)
+    print("  请把它们另存为 .docx / .pptx，或直接提供文本后重扫。", file=stream)
+
+
+def cmd_ingest(args: argparse.Namespace) -> int:
+    import json
+    from collections import Counter
+
+    sources, unsupported = _iter_ingest_sources(args.sources)
+    if not sources:
+        print(
+            "没有找到可转换的文件（支持 "
+            + "、".join(sorted(ingest_mod.SUPPORTED_SUFFIXES))
+            + "）。",
+            file=sys.stderr,
+        )
+        _report_unsupported(unsupported, stream=sys.stderr)
+        return 2
+
+    out_dir = Path(args.output).expanduser() if args.output else None
+    if out_dir is None and len(sources) > 1:
+        print("要转换多个文件，请用 -o 指定输出目录。", file=sys.stderr)
+        return 2
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 同名不同扩展名（``方案.docx`` 与 ``方案.pptx``）会撞到同一个 ``方案.md``，
+    # 后转的把先转的覆盖掉——而汇总还报「已转换 2 个」，是假成功。
+    # 只有真冲突时才给名字补上原扩展名，不冲突就保持干净的文件名。
+    stem_counts = Counter(path.stem for path in sources)
+
+    explicit_media = Path(args.media_dir).expanduser() if args.media_dir else None
+    if explicit_media is not None:
+        explicit_media.mkdir(parents=True, exist_ok=True)
+    # 多个源文件共用一个 --media-dir 会互相覆盖图片（每个文件都从 img_0001
+    # 开始编号）。所以只要源文件不止一个，就按源文件名再分一层子目录。
+    share_media = explicit_media is not None and len(sources) == 1
+
+    records: list[dict] = []
+    for source in sources:
+        stem = source.stem
+        if stem_counts[stem] > 1:
+            stem = f"{stem}.{source.suffix.lstrip('.').lower()}"
+
+        if out_dir is not None:
+            target: Path | None = out_dir / f"{stem}.md"
+            if explicit_media is None:
+                media = out_dir / f"{stem}_media"
+            elif share_media:
+                media = explicit_media
+            else:
+                media = explicit_media / stem
+        else:
+            target = None
+            media = (
+                explicit_media / stem
+                if explicit_media is not None
+                else source.parent / f"{stem}_media"
+            )
+
+        try:
+            result = ingest_mod.convert(
+                source, media_dir=media, extract_images=not args.no_images
+            )
+        except (ingest_mod.IngestError, ingest_mod.MissingDependency) as exc:
+            print(f"[跳过] {source.name}：{exc}", file=sys.stderr)
+            records.append({"source": str(source), "ok": False, "error": str(exc)})
+            continue
+
+        text = result.markdown
+        if not args.no_header:
+            text = ingest_mod.markdown_header(result) + text
+
+        records.append(
+            {
+                "source": str(source),
+                "ok": True,
+                "output": str(target) if target else None,
+                "stats": result.stats,
+                "warnings": [
+                    {"code": n.code, "message": n.message} for n in result.warnings
+                ],
+                "infos": [
+                    {"code": n.code, "message": n.message} for n in result.infos
+                ],
+            }
+        )
+
+        if target is not None:
+            target.write_text(text, encoding="utf-8")
+        else:
+            print(text)
+
+    failures = [r for r in records if not r["ok"]]
+    succeeded = [r for r in records if r["ok"]]
+
+    if args.json:
+        _report_unsupported(unsupported, stream=sys.stderr)
+        print(json.dumps(records, ensure_ascii=False, indent=2))
+        return 2 if failures else 0
+
+    if out_dir is None:
+        _report_unsupported(unsupported, stream=sys.stderr)
+        return 2 if failures else 0
+
+    print(f"已转换 {len(succeeded)} / {len(records)} 个文件：")
+    for record in records:
+        name = Path(record["source"]).name
+        if not record["ok"]:
+            print(f"  ✗ {name}  跳过（{record['error'].splitlines()[0]}）")
+            continue
+        stats = record["stats"]
+        detail = "、".join(f"{k} {v}" for k, v in stats.items())
+        print(f"  ✓ {name}  →  {record['output']}")
+        print(f"      {detail}")
+        for warning in record["warnings"]:
+            print(f"      ⚠ {warning['code']}")
+        for info in record["infos"]:
+            print(f"      · {info['code']}")
+
+    warned = [r for r in succeeded if r["warnings"]]
+    if warned:
+        print()
+        print(
+            f"注意：{len(warned)} 个文件带有告警（已写进 .md 顶部注记）。"
+            "带公式的文件必须向用户核实原式后再动笔。"
+        )
+    noted = [r for r in succeeded if r["infos"]]
+    if noted:
+        print(
+            f"另有 {len(noted)} 个文件带其它提示，同样写进了 .md 顶部注记——"
+            "它们说的是「有内容没能提取出来」，不要当成「材料里没有」。"
+        )
+    _report_unsupported(unsupported, stream=sys.stdout)
+    return 2 if failures else 0
+
+
+# --------------------------------------------------------------------------
 # 入口
 # --------------------------------------------------------------------------
 
@@ -450,6 +719,7 @@ _COMMANDS = {
     "lint": cmd_lint,
     "info": cmd_info,
     "template": cmd_template,
+    "ingest": cmd_ingest,
 }
 
 
@@ -463,6 +733,12 @@ def main(argv: list[str] | None = None) -> int:
         return handler(args)
     except draft_parser.ParseError as exc:
         print(f"稿件解析失败：\n{exc}", file=sys.stderr)
+        return 1
+    except ingest_mod.MissingDependency as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    except ingest_mod.IngestError as exc:
+        print(f"材料读取失败：{exc}", file=sys.stderr)
         return 1
     except FileNotFoundError as exc:
         print(f"文件不存在：{exc}", file=sys.stderr)

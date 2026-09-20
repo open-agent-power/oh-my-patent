@@ -1,0 +1,17 @@
+# 可选依赖：只在「把 Word / PowerPoint 材料读成文本」时才需要。
+#
+#     pip install -r requirements-ingest.txt
+#
+# 装这四个包的**唯一**目的是跑 `patent.py ingest` 与
+# `tools/docx_to_md.py` / `tools/pptx_to_md.py`。
+# 生成申请文件（`build` / `lint` / `info` / `template`）不需要它们，
+# 仓库的核心路径因此可以保持「零外部依赖」。
+#
+# 为什么不全用 mammoth 一家：
+#   实测 mammoth 1.12.2 有两条静默失真——内嵌公式（OMML）整段丢弃、
+#   Markdown writer 不认表格。所以流程改成 mammoth 转 HTML，
+#   再由 markdownify 落 Markdown，公式则在转换前就替换成占位文本。
+#   细节见 oh_my_patent/ingest.py 的模块说明。
+mammoth>=1.8
+markdownify>=0.13
+python-pptx>=1.0

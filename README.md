@@ -2,8 +2,9 @@
 
 > **一句话自动化专利 SKILL，同时适配 WPS、Office。**
 
-把一句话的技术想法，变成一份可以直接提交国家知识产权局的专利申请文件。
-生成的 `.docx` 在 WPS 与 Microsoft Office 下打开，版面完全一致。
+把一句话的技术想法——或者一堆散落的 Word / PPT 材料——变成一份可以直接提交
+国家知识产权局的专利申请文件。生成的 `.docx` 在 WPS 与 Microsoft Office 下
+打开，版面完全一致。
 
 支持**发明**、**实用新型**、**外观设计**三种专利类型。
 
@@ -40,13 +41,16 @@
 # 只依赖两个纯 Python 包，不需要编译器
 pip install -r requirements.txt
 
-# 生成一份稿件骨架（发明 / 实用新型 / 外观设计）
+# ① 材料是 Word / PPT 的话，先转成可读的文本（可选依赖，见「读材料」一节）
+python tools/patent.py ingest 材料目录/ -o outputs/scan/我的案子/
+
+# ② 生成一份稿件骨架（发明 / 实用新型 / 外观设计）
 python tools/patent.py template invention -o 我的稿件.md
 
-# 填好内容后先自检，确认没有格式硬伤
+# ③ 填好内容后先自检，确认没有格式硬伤
 python tools/patent.py lint 我的稿件.md
 
-# 生成申请文件
+# ④ 生成申请文件
 python tools/patent.py build 我的稿件.md -o 申请文件.docx
 ```
 
@@ -61,10 +65,61 @@ python tools/patent.py build 我的稿件.md -o 申请文件.docx --strict
 
 ---
 
+## 读材料（Word / PPT → Markdown）
+
+写交底书之前，手里通常已经有一堆现成材料：立项报告、技术方案、评审 PPT、
+测试记录。它们大多是 `.docx` / `.pptx`。Agent 读不了二进制，必须先转成文本。
+
+```bash
+# 整个目录递归转换（每个源文件生成一个同名 .md，旁边配一个 _media/ 放图）
+python tools/patent.py ingest 材料目录/ -o outputs/scan/我的案子/
+
+# 单份文件，结果直接打到标准输出
+python tools/patent.py ingest 交底书.docx
+
+# 单份转换脚本（与上面等价，参数更直白）
+python tools/docx_to_md.py -i 交底书.docx -o 交底书.md
+python tools/pptx_to_md.py -i 评审.pptx  -o 评审.md
+```
+
+### 允许丢失，但不允许静默丢失
+
+这一层的目标不是「尽量多抽出文字」，而是**每一点失真都要被点名**。
+理由是失败的代价不对称：材料里少了一段公式，Agent 不会察觉——它会拿着
+缺了核心公式的文本去写权利要求，而且写得头头是道。
+
+所以：
+
+- **公式不再整段消失。** 内嵌的 OMML 公式在转换**之前**就被替换成
+  `⟪公式1: E=12mv2⟫` 这样的占位文本，位置得以保留，同时产生一条告警。
+  占位里的式子是**退化**的（分式摊平、上下标掉层级），涉及时须向用户索取原式。
+- **表格还原成真正的 Markdown 表格**，行列关系不丢。
+- **读不了的东西被列出来**，不静默跳过：旧格式 `.doc` 会报错，
+  目录里的 `.pdf` / `.xls` 会一条条列出，让你知道「没读到」和「材料里没有」
+  是两件不同的事。
+- 转换结果顶部写入一段元信息（源文件、统计、告警注记），便于追溯。
+  不需要时用 `--no-header` 关掉。
+
+> **一个实测结论**：最省事的做法——直接用 `mammoth` 的 Markdown 输出——有两条
+> 静默失真。实测（mammoth 1.12.2）一份含 `E = ½mv²` 的文档，转出来的行内公式
+> 位置**只剩一个空格**，读者完全看不出这里原本有个公式；表格则被摊成一行一个
+> 单元格的段落，`参数 / 含义 / 单位 / 数值` 的行列关系全没了。所以这里改成
+> **mammoth 转 HTML → markdownify 落 Markdown**，且公式在转换前就换成占位。
+> 细节见 `oh_my_patent/ingest.py` 的模块说明。
+
+依赖是可选的，没装只影响这一步，生成申请文件的路径照常：
+
+```bash
+pip install -r requirements-ingest.txt
+```
+
+---
+
 ## 命令行
 
 | 子命令 | 作用 |
 | --- | --- |
+| `ingest` | Word / PPT 材料 → Markdown（需可选依赖，见上一节） |
 | `build` | 稿件 → 申请文件 `.docx` |
 | `lint` | 只做合规自检，不生成文件 |
 | `info` | 打印解析结果摘要，确认稿件被正确理解 |
@@ -83,6 +138,9 @@ python tools/patent.py build 稿件.md -o 申请文件.docx \
 
 # 自检结果用 JSON 输出，便于程序消费
 python tools/patent.py lint 稿件.md --json
+
+# 批量读材料，图片另存到指定目录，汇总也用 JSON
+python tools/patent.py ingest 材料/ -o outputs/scan/案子/ --media-dir 图/ --json
 ```
 
 各选项含义：
@@ -98,6 +156,16 @@ python tools/patent.py lint 稿件.md --json
 | `--page-numbers` | 页脚居中加页码 |
 | `--strict` | 自检有错误时拒绝生成 |
 | `--type` | 覆盖稿件里写的专利类型 |
+
+`ingest` 的选项：
+
+| 选项 | 说明 |
+| --- | --- |
+| `-o` | 输出目录，每个源文件生成一个同名 `.md`；省略时打到标准输出 |
+| `--media-dir` | 图片输出目录，默认「与 `.md` 同级的 `{名字}_media`」 |
+| `--no-images` | 不导出图片，只在正文留下位置提示 |
+| `--no-header` | 不在 `.md` 顶部写入转换元信息与告警注记 |
+| `--json` | 汇总以 JSON 输出（转了几个、跳了哪些、有多少告警） |
 
 ---
 
@@ -245,10 +313,13 @@ WPS 里解析出不同字体、不同字宽、不同断行位置，中文文书�
 oh-my-patent/
 ├── SKILL.md          Agent Skill 入口：编排与路由
 ├── prompts/          分步指令（渐进式披露，用到哪步读哪份）
+│   ├── 01-intake.md ~ 07-self-check.md
+│   └── iteration/    迭代修订（规划中，尚未实现）
 ├── oh_my_patent/     分层 Python 包：真正的逻辑
 │   ├── spec.py       版面规范常量（法规要求集中在此，便于审阅调整）
 │   ├── schema.py     数据模型 + 权利要求分段
 │   ├── parser.py     稿件解析（Markdown / YAML / JSON → 模型）
+│   ├── ingest.py     材料读取层（Word / PPT → Markdown，失真会点名）
 │   ├── lint.py       合规自检
 │   ├── lint_ai.py    AI 类发明的专门自检
 │   ├── report.py     自检结果类型（两组检查共用）
@@ -257,9 +328,12 @@ oh-my-patent/
 │   └── render/
 │       └── docx.py   渲染成 .docx
 ├── tools/            对外脚本（薄，逻辑都在包里）
+│   ├── patent.py     统一入口
+│   ├── docx_to_md.py 单份 Word 转换
+│   └── pptx_to_md.py 单份 PPT 转换
 ├── docs/             格式规范与设计文档
 ├── examples/         可直接跑的示例稿件
-├── tests/            XML 层验收测试
+├── tests/            XML 层与读取层的验收测试
 └── outputs/          产物（gitignore）
 ```
 
@@ -269,6 +343,17 @@ oh-my-patent/
 
 `tools/` 下只有薄脚本，真正的逻辑留在 `oh_my_patent/` 包里——这样既符合
 Agent Skill 的调用习惯，又保住了可测试性。
+
+依赖也是分层的，而且这条线是刻意划的：**读取用第三方库，生成保持零外部依赖。**
+
+| 路径 | 依赖 |
+| --- | --- |
+| `ingest` / `docx_to_md.py` / `pptx_to_md.py` | `mammoth` + `markdownify` + `python-pptx`（`requirements-ingest.txt`） |
+| `build` / `lint` / `info` / `template` | 只要 `python-docx` + `PyYAML`（`requirements.txt`） |
+
+理由是：只有「生成 .docx」这条路径零外部依赖，「生成的 XML 合法」才能靠纯
+Python 单测守住。多引入一个外部渲染器，就多一处测不到的黑盒——那正是本项目
+要与「打开看一眼」式验证拉开距离的地方。
 
 ---
 
@@ -280,10 +365,14 @@ python -m unittest discover -s tests -v
 
 测试的重点不是「能生成文件」，而是**生成的文件在 XML 层面是合法的**：
 把 `.docx` 当 zip 拆开，逐项校验 XML 良构性、Content-Types 完整性、
-关系可达性、元素顺序、页边距换算、主题引用是否清零。
+关系可达性、元素顺序、页边距换算、主题引用是否清零。理由很直接：
+WPS 对 OOXML 相当宽容，Office 却严格按 schema 校验——只在 WPS 里点开
+看一眼，根本发现不了这类问题。
 
-理由很直接：WPS 对 OOXML 相当宽容，Office 却严格按 schema 校验。
-只在 WPS 里点开看一眼，根本发现不了这类问题。
+材料读取层（`test_ingest.py`）守的是另一条线——**转换不会静默失真**：
+公式必须变成显式占位而不是凭空消失，表格必须还原成合法 Markdown 表格，
+读不了的格式必须被一条条点名。**丢内容比报错危险得多**：报错你会知道，
+丢了内容它不会说。
 
 ---
 

@@ -22,6 +22,16 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.optional-dependencies]
+# 只在「读 Office 材料」时用到（`patent.py ingest` 与两个转换脚本）。
+# 生成 .docx 的路径一行都不会 import 它们——所以它们是可选而不是必装。
+# 装上：pip install -e ".[ingest]"，或 pip install -r requirements-ingest.txt
+ingest = [
+    "mammoth>=1.8",       # .docx → HTML（它自己的 Markdown 输出会丢公式与表格）
+    "markdownify>=0.13",  # HTML → Markdown，补上 mammoth 缺的表格还原
+    "python-pptx>=1.0",   # .pptx 按页抽取
+]
+
 [project.scripts]
 oh-my-patent = "oh_my_patent.cli:main"
 
