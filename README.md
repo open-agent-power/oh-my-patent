@@ -41,22 +41,22 @@
 pip install -r requirements.txt
 
 # 生成一份稿件骨架（发明 / 实用新型 / 外观设计）
-python scripts/patent.py template invention -o 我的稿件.md
+python tools/patent.py template invention -o 我的稿件.md
 
 # 填好内容后先自检，确认没有格式硬伤
-python scripts/patent.py lint 我的稿件.md
+python tools/patent.py lint 我的稿件.md
 
 # 生成申请文件
-python scripts/patent.py build 我的稿件.md -o 申请文件.docx
+python tools/patent.py build 我的稿件.md -o 申请文件.docx
 ```
 
-也可以不安装依赖，直接指定解释器运行 `scripts/patent.py`。
+也可以不安装依赖，直接指定解释器运行 `tools/patent.py`。
 
 `build` 会自动先跑一遍自检并把结果打出来。加 `--strict` 可以在自检不通过时
 拒绝生成文件，适合放进自动化流程：
 
 ```bash
-python scripts/patent.py build 我的稿件.md -o 申请文件.docx --strict
+python tools/patent.py build 我的稿件.md -o 申请文件.docx --strict
 ```
 
 ---
@@ -74,15 +74,15 @@ python scripts/patent.py build 我的稿件.md -o 申请文件.docx --strict
 
 ```bash
 # 每个部分独立成文件（对应国知局电子申请的真实提交形态）
-python scripts/patent.py build 稿件.md -o 输出目录/ --split --page-numbers
+python tools/patent.py build 稿件.md -o 输出目录/ --split --page-numbers
 
 # 换字体、换行距、调小标题处理方式
-python scripts/patent.py build 稿件.md -o 申请文件.docx \
+python tools/patent.py build 稿件.md -o 申请文件.docx \
   --font 仿宋 --font-size 12 --line-spacing 1.5 \
   --subsection-style flatten
 
 # 自检结果用 JSON 输出，便于程序消费
-python scripts/patent.py lint 稿件.md --json
+python tools/patent.py lint 稿件.md --json
 ```
 
 各选项含义：
@@ -242,20 +242,33 @@ WPS 里解析出不同字体、不同字宽、不同断行位置，中文文书�
 ## 项目结构
 
 ```
-oh_my_patent/
-├── spec.py          版面规范常量（法规要求集中在此，便于审阅调整）
-├── schema.py        数据模型 + 权利要求分段
-├── parser.py        稿件解析（Markdown / YAML / JSON → 模型）
-├── lint.py          合规自检
-├── oxml.py          OOXML 底层修补（WPS / Office 双适配）
-├── cli.py           命令行入口
-└── render/
-    └── docx.py      渲染成 .docx
+oh-my-patent/
+├── SKILL.md          Agent Skill 入口：编排与路由
+├── prompts/          分步指令（渐进式披露，用到哪步读哪份）
+├── oh_my_patent/     分层 Python 包：真正的逻辑
+│   ├── spec.py       版面规范常量（法规要求集中在此，便于审阅调整）
+│   ├── schema.py     数据模型 + 权利要求分段
+│   ├── parser.py     稿件解析（Markdown / YAML / JSON → 模型）
+│   ├── lint.py       合规自检
+│   ├── lint_ai.py    AI 类发明的专门自检
+│   ├── report.py     自检结果类型（两组检查共用）
+│   ├── oxml.py       OOXML 底层修补（WPS / Office 双适配）
+│   ├── cli.py        命令行入口
+│   └── render/
+│       └── docx.py   渲染成 .docx
+├── tools/            对外脚本（薄，逻辑都在包里）
+├── docs/             格式规范与设计文档
+├── examples/         可直接跑的示例稿件
+├── tests/            XML 层验收测试
+└── outputs/          产物（gitignore）
 ```
 
 分层原则：**模型只描述「文书是什么」，不掺杂排版细节。** 版面规则集中在
 `spec` 与 `oxml`，因此将来要加 PDF 或纯文本输出，只需在 `render` 下新增模块，
 解析层与模型层不必改动。
+
+`tools/` 下只有薄脚本，真正的逻辑留在 `oh_my_patent/` 包里——这样既符合
+Agent Skill 的调用习惯，又保住了可测试性。
 
 ---
 

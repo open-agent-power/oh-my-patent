@@ -86,7 +86,7 @@
 | 技术交底书 | 无 | `prompts/05` | 新增 |
 | **申请文件生成** | ✅ 完整（lint + render） | 保留，作为强项 | **保留** |
 | **OOXML 双适配** | ✅ 完整（oxml.py） | 保留 | **保留** |
-| **XML 层测试体系** | ✅ 96 项 | 保留并扩展 | **保留** |
+| **XML 层测试体系** | ✅ 107 项 | 保留并扩展 | **保留** |
 | 公式 OMML | 无 | `oh_my_patent/math.py` | 新增（方案已定，见 D4） |
 | mermaid 出图 | 无 | `tools/mermaid.py` | 新增（自己实现） |
 | 迭代修订 | 无 | `cli.py` 加 `revise` 子命令 | 新增 |
@@ -94,13 +94,39 @@
 
 ## 4. 实施步骤
 
-### P1 · 结构重构（只搬家，零行为变更）
+### P1 · 结构重构（只搬家，零行为变更）——**已完成 2026-09-20**
 
-1. `SKILL.md` 拆分 → `prompts/01-intake.md` ~ `prompts/07-self-check.md`
-2. 新建 `tools/`、`docs/`、`outputs/`（后者 gitignore）
-3. `references/format-spec.md` → `docs/format-spec.md`
-4. 清理：`lint.py` 的 `DES-*` 命名不统一、码号乱序
-5. **验收**：96 项测试全绿 + 四示例输出与重构前逐字节一致
+| 项 | 状态 | 说明 |
+| --- | --- | --- |
+| 1. `SKILL.md` 拆分 → `prompts/01`~`07` | 完成 | SKILL.md 由 312 行缩到 **119 行**，改为纯编排（路由判定表 + 通则） |
+| 2. 新建 `tools/`、`docs/`、`outputs/` | 完成 | `outputs/` 用 `outputs/*` + `!outputs/.gitkeep` 保目录、不保内容 |
+| 3. `references/format-spec.md` → `docs/format-spec.md` | 完成 | `references/`、`scripts/` 两个目录已合并掉（`scripts/patent.py` → `tools/patent.py`） |
+| 4. 清理 `lint.py` 的 `DES-*` 命名 | 完成 | `DES-USAGE`/`DES-POINTS`/`DES-BEST_VIEW`/`DES-IMAGES`/`DES-PATH` → **`DES-001`~`DES-005`** |
+| 4b. 清理「码号乱序」 | **未做，判定为误报** | 见下 |
+| 5. 验收 | 完成 | 见下 |
+
+**关于 4b（码号乱序）**：核下来这不是缺陷。`CLAIM-011`/`CLAIM-012` 是**逐项**检查
+（在 `for claim in draft.claims` 循环内），`CLAIM-010` 是**整篇**检查（只看第 1 项，
+在循环外），两者的源码相邻关系是结构决定的，不是排错。
+重编号只会把 `docs/format-spec.md` 里公开的码表搅乱、且让已发布的三个码含义漂移，
+**收益为零、风险非零**。已改为在这两处各加一段注释说明位置原因，行为零变更。
+
+**顺带补的洞**：`check_design()` 原先**零测试覆盖**，本次新增
+`tests/test_lint_design.py`（11 项），含一道**命名约定守门测试**
+（扫描源码里的检查码字面量，断言全部匹配 `前缀-三位数字`），防止下次又跑出别的写法。
+
+**验收（P1 实际结果，判据已更正）**：
+
+| 项 | 结果 |
+| --- | --- |
+| 测试 | **107 项全绿**（96 原有 + 11 新增） |
+| 四示例 docx | 发明 / 实用新型 / 外观设计 / AI 方法，与重构前**逐条目内容字节一致** |
+| 四示例自检输出 | 不变 |
+
+> **原定的「逐字节一致」判据不可达，已更正为「逐条目内容一致」。**
+> 实测同一稿件连跑两次，文件 sha256 就不同——差异只在 zip 条目的 mtime
+> （python-docx 写入时设为构建时刻），所有条目内容完全一致。
+> 详见 `refactor-plan.md` §7.2。
 
 ### P2 · 吸收上游能力
 

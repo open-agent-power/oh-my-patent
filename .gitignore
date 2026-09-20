@@ -30,6 +30,8 @@ htmlcov/
 # 真实案件的稿件也不该进公开仓库。
 out/
 output/
+outputs/*
+!outputs/.gitkeep
 *.docx
 *.doc
 ~$*.docx

@@ -3,8 +3,8 @@
 
 直接跑这个脚本即可，不需要先 ``pip install -e .``：
 
-    python scripts/patent.py lint 稿件.md
-    python scripts/patent.py build 稿件.md -o 申请文件.docx
+    python tools/patent.py lint 稿件.md
+    python tools/patent.py build 稿件.md -o 申请文件.docx
 
 它所做的唯一一件事，就是把仓库根目录塞进 ``sys.path`` 后转发给
 :func:`oh_my_patent.cli.main`。真正的逻辑一行都不在这里。

@@ -285,6 +285,11 @@ def check_claims(draft: PatentDraft) -> list[Issue]:
 
     # 第一项权利要求必须是独立权利要求：从属权利要求需要有可引用的在先
     # 权利要求，排在首位时无权利要求可引。
+    #
+    # 位置说明：本项是**整篇级**检查（只看权利要求书的第 1 项），所以放在
+    # 上面那个**逐项**循环之外。这也是源码里 `CLAIM-010` 出现在 `CLAIM-011`、
+    # `CLAIM-012` 之后的原因——不是码号乱序，而是逐项检查与整篇检查分属两段。
+    # 判定逻辑彼此独立，互不影响。
     if independents and draft.claims and not draft.claims[0].independent:
         issues.append(
             Issue(
@@ -530,22 +535,25 @@ def check_design(draft: PatentDraft) -> list[Issue]:
         return issues
 
     brief = draft.design_brief
+    # 码号与其余各组保持同一种写法：`前缀-三位数字`。
+    # 早先这里用的是 `DES-USAGE` 这样的词码，与同组的 `DES-IMAGES`、
+    # 以及全项目的 `TITLE-001` / `CLAIM-001` 风格不一致，已统一为数字码。
     required = (
-        ("usage", brief.usage, "用途", "简要说明应当写明产品的用途。"),
-        ("points", brief.points, "设计要点", "简要说明应当写明设计要点。"),
-        ("best_view", brief.best_view, "最能表明设计要点的图片", "应当指定最能表明设计要点的一幅视图。"),
+        ("DES-001", brief.usage, "用途", "简要说明应当写明产品的用途。"),
+        ("DES-002", brief.points, "设计要点", "简要说明应当写明设计要点。"),
+        ("DES-003", brief.best_view, "最能表明设计要点的图片", "应当指定最能表明设计要点的一幅视图。"),
     )
     for code, value, label, hint in required:
         if not value.strip():
             issues.append(
-                Issue(Severity.ERROR, f"DES-{code.upper()}", f"简要说明缺少「{label}」项。", "简要说明", hint)
+                Issue(Severity.ERROR, code, f"简要说明缺少「{label}」项。", "简要说明", hint)
             )
 
     if not draft.drawings:
         issues.append(
             Issue(
                 Severity.ERROR,
-                "DES-IMAGES",
+                "DES-004",
                 "没有登记任何外观设计图片。",
                 "外观设计",
                 "外观设计的保护范围以图片或照片为准，必须提交六面视图，必要时补充立体图与剖视图。",
@@ -557,7 +565,7 @@ def check_design(draft: PatentDraft) -> list[Issue]:
             issues.append(
                 Issue(
                     Severity.WARNING,
-                    "DES-PATH",
+                    "DES-005",
                     f"以下视图没有实际的图片文件路径：{'、'.join(map(str, missing))}。",
                     "外观设计",
                     "生成文档时这些位置会留空，需要在交付前补齐图片。",
